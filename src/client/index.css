@@ -1,0 +1,32 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --surface-canvas: #faf8f4;
+    --surface-card: #ffffff;
+    --surface-subtle: #f3efe8;
+    --ink-primary: #1e1c19;
+    --ink-secondary: #635d54;
+    --accent-terracotta: #c85a32;
+    --accent-terracotta-dark: #a84824;
+  }
+
+  html {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", sans-serif;
+    background-color: var(--surface-canvas);
+    color: var(--ink-primary);
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .font-editorial {
+    font-family: "Iowan Old Style", "New York", Georgia, Cambria, "Times New Roman", serif;
+  }
+}
+
+.pb-safe {
+  padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+}
+
+.mb-nav {
+  margin-bottom: calc(4.75rem + env(safe-area-inset-bottom));
+}
