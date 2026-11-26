@@ -25,7 +25,12 @@ import {
   type RecipeRow,
 } from "../lib/dbHelpers";
 import { deleteImagesFromDb, saveImageToDb } from "../lib/imageStore";
-import { AI_VISION_MODEL, extractRecipeWithLuna } from "../lib/aiExtract";
+import {
+  AI_VISION_MODEL,
+  extractRecipeWithLuna,
+  generateRecipesFromPantryWithLuna,
+} from "../lib/aiExtract";
+import type { GeneratedRecipeIdea, RecipeIngredient } from "../../shared/types";
 
 const ingredientSchema = z.object({
   rawText: z.string().optional().default(""),
@@ -133,6 +138,130 @@ recipesRoutes.post("/extract-ai", async (c) => {
         error: err instanceof Error ? err.message : "AI extraction failed",
         fallbackToLocalOcr: true,
       },
+      502
+    );
+  }
+});
+
+const generatePantrySchema = z.object({
+  mealType: z.enum(["any", "breakfast", "lunch", "dinner", "snack", "dessert"]).optional().default("any"),
+  maxMinutes: z.number().int().min(10).max(180).optional().default(35),
+  strictMode: z.boolean().optional().default(false),
+  craving: z.string().max(300).optional().default(""),
+  priorityItemIds: z.array(z.string()).max(15).optional().default([]),
+});
+
+// Generate 3 tailored recipes from the user's current Pantry & Fridge inventory via GPT-6 Luna
+recipesRoutes.post("/generate-from-pantry", async (c) => {
+  const apiKey = c.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return c.json({ error: "OpenAI API key is not configured on this Worker" }, 503);
+  }
+
+  const rawBody = await c.req.json().catch(() => ({}));
+  const parsed = generatePantrySchema.safeParse(rawBody);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid generation options" }, 400);
+  }
+
+  const [pantryItems, priceOverrides] = await Promise.all([
+    loadAllPantryItems(c.env.DB),
+    loadPriceOverrides(c.env.DB),
+  ]);
+
+  const available = pantryItems.filter((p) => p.stockStatus !== "out");
+  if (available.length === 0) {
+    return c.json(
+      { error: "Add a few items to your Pantry & Fridge first so Pantry Chef knows what you have!" },
+      400
+    );
+  }
+
+  const pantryLines = available.map((p) => {
+    const qty = p.quantity !== null ? `${p.quantity} ${p.unit}`.trim() : "";
+    const status = p.stockStatus === "low" ? " (running low)" : "";
+    return `${p.name} [ingredient: ${p.canonicalName}]${qty ? ` — ${qty}` : ""} (${p.location})${status}`;
+  });
+
+  const priorityItems = available
+    .filter((p) => parsed.data.priorityItemIds.includes(p.id))
+    .map((p) => p.canonicalName);
+
+  try {
+    const { drafts, model } = await generateRecipesFromPantryWithLuna({
+      apiKey,
+      pantryLines,
+      priorityItems,
+      mealType: parsed.data.mealType,
+      maxMinutes: parsed.data.maxMinutes,
+      strictMode: parsed.data.strictMode,
+      craving: parsed.data.craving,
+    });
+
+    const ideas: GeneratedRecipeIdea[] = drafts.map((draft) => {
+      const costResult = calculateRecipeCost(
+        draft.ingredients,
+        draft.servings,
+        priceOverrides,
+        pantryItems
+      );
+      const nutrition = calculateRecipeNutrition(draft.ingredients, draft.servings);
+      const mappedIngs: RecipeIngredient[] = draft.ingredients.map((ing, idx) => ({
+        id: `idea-ing-${idx}`,
+        rawText: ing.rawText || "",
+        quantity: ing.quantity,
+        unit: ing.unit,
+        name: ing.name,
+        canonicalName: ing.canonicalName || canonicalizeIngredientName(ing.name),
+        aisle: (ing.aisle as GroceryAisle) || guessAisle(ing.name),
+        notes: ing.notes || "",
+        foodBarcode: null,
+        estimatedCostCents: costResult.ingredientCosts[idx].costCents,
+        sortOrder: idx,
+      }));
+
+      const { matches, summary } = evaluateRecipePantryMatch(mappedIngs, pantryItems);
+      const usedPantryIngredients: string[] = [];
+      const missingIngredients: string[] = [];
+      for (const ing of mappedIngs) {
+        const m = matches.get(ing.id);
+        if (m?.status === "have_enough" || m?.status === "partial") {
+          usedPantryIngredients.push(ing.name);
+        } else {
+          missingIngredients.push(ing.name);
+        }
+      }
+
+      return {
+        title: draft.title,
+        description: draft.description,
+        servings: draft.servings,
+        prepMinutes: draft.prepMinutes,
+        cookMinutes: draft.cookMinutes,
+        tags: draft.tags,
+        ingredients: mappedIngs,
+        steps: draft.steps,
+        nutritionScore: nutrition.score,
+        nutritionGrade: nutrition.grade,
+        nutritionBreakdown: nutrition,
+        estimatedCostCents: costResult.totalCents,
+        costPerServingCents: costResult.perServingCents,
+        pantrySummary: summary,
+        usedPantryIngredients,
+        missingIngredients,
+      };
+    });
+
+    return c.json({ ideas, model, pantryCountUsed: available.length });
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        message: "generate_from_pantry_failed",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+    return c.json(
+      { error: err instanceof Error ? err.message : "Could not generate recipes right now" },
       502
     );
   }

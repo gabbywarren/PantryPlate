@@ -215,3 +215,170 @@ export async function extractRecipeWithLuna(params: {
     model: data.model || AI_VISION_MODEL,
   };
 }
+
+const PANTRY_IDEAS_JSON_SCHEMA = {
+  name: "pantry_recipe_ideas",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["recipes"],
+    properties: {
+      recipes: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "title",
+            "description",
+            "servings",
+            "prepMinutes",
+            "cookMinutes",
+            "tags",
+            "ingredients",
+            "steps",
+          ],
+          properties: {
+            title: { type: "string" },
+            description: { type: "string" },
+            servings: { type: "integer" },
+            prepMinutes: { type: "integer" },
+            cookMinutes: { type: "integer" },
+            tags: { type: "array", items: { type: "string" } },
+            ingredients: {
+              type: "array",
+              items: {
+                type: "object",
+                additionalProperties: false,
+                required: ["quantity", "unit", "name", "notes"],
+                properties: {
+                  quantity: { type: ["number", "null"] },
+                  unit: { type: "string" },
+                  name: { type: "string" },
+                  notes: { type: "string" },
+                },
+              },
+            },
+            steps: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
+export async function generateRecipesFromPantryWithLuna(params: {
+  apiKey: string;
+  pantryLines: string[];
+  priorityItems: string[];
+  mealType: string;
+  maxMinutes: number;
+  strictMode: boolean;
+  craving: string;
+}): Promise<{ drafts: ParsedRecipeDraft[]; model: string }> {
+  const systemPrompt = `You are PantryPlate Chef, a creative, practical home-cooking chef who invents delicious, realistic recipes based on what is already in the user's pantry and fridge.
+
+Rules:
+- Generate exactly 3 distinct, genuinely tasty, realistic home-cooked recipes.
+- ${
+    params.strictMode
+      ? "STRICT PANTRY MODE: Use ONLY ingredients from the user's pantry list plus basic tap water. Do NOT introduce any extra ingredients not listed."
+      : "PANTRY-FIRST MODE: Base each recipe heavily on the user's pantry list. You may include at most 1–2 common extra ingredients if they dramatically elevate the dish, and keep at least 1 recipe 100% pantry-only."
+  }
+- Match ingredient names closely to the canonical names listed so pantry matching works accurately.
+- Keep total time (prepMinutes + cookMinutes) at or under ${params.maxMinutes} minutes.
+- Provide clean structured ingredients (quantity as decimal number or null, standard short unit like cup/tbsp/tsp/oz/lb/clove/can/each, clean ingredient name without prep words, concise notes).
+- Write clear, easy-to-follow numbered cooking steps (without leading "1." prefixes).`;
+
+  const userLines = [
+    `Available Pantry & Fridge Inventory:\n${params.pantryLines.map((l) => `- ${l}`).join("\n")}`,
+  ];
+  if (params.priorityItems.length > 0) {
+    userLines.push(`Must prioritize using up: ${params.priorityItems.join(", ")}`);
+  }
+  if (params.mealType && params.mealType !== "any") {
+    userLines.push(`Meal type: ${params.mealType}`);
+  }
+  userLines.push(`Max total cook + prep time: ${params.maxMinutes} minutes`);
+  if (params.craving.trim()) {
+    userLines.push(`Preferences / craving / dietary notes: ${params.craving.trim()}`);
+  }
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: AI_VISION_MODEL,
+      reasoning_effort: "low",
+      response_format: {
+        type: "json_schema",
+        json_schema: PANTRY_IDEAS_JSON_SCHEMA,
+      },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userLines.join("\n\n") },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    console.error(
+      JSON.stringify({
+        message: "openai_pantry_generate_error",
+        status: res.status,
+        body: errText.slice(0, 400),
+      })
+    );
+    throw new Error(`OpenAI recipe generation failed (${res.status})`);
+  }
+
+  const data = (await res.json()) as {
+    model?: string;
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error("OpenAI returned an empty response");
+
+  const parsed = JSON.parse(content) as { recipes: Omit<AiExtractedRaw, "sourceHandle">[] };
+  const drafts: ParsedRecipeDraft[] = (parsed.recipes ?? []).slice(0, 3).map((raw) => {
+    const ingredients = (raw.ingredients ?? [])
+      .filter((i) => i.name && i.name.trim().length > 0)
+      .map((i) => {
+        const cleanName = i.name.trim();
+        const unit = normalizeUnit(i.unit || "");
+        return {
+          rawText: `${i.quantity ?? ""} ${unit} ${cleanName}${i.notes ? `, ${i.notes}` : ""}`.trim(),
+          quantity: typeof i.quantity === "number" && Number.isFinite(i.quantity) ? i.quantity : null,
+          unit: unit || (i.quantity !== null ? "each" : ""),
+          name: cleanName,
+          canonicalName: canonicalizeIngredientName(cleanName),
+          aisle: guessAisle(cleanName),
+          notes: (i.notes || "").trim(),
+        };
+      });
+
+    return {
+      title: (raw.title || "Pantry Special").trim(),
+      description: (raw.description || "").trim().slice(0, 400),
+      sourceHandle: "PantryPlate Chef",
+      servings: Math.max(1, Math.min(16, Math.round(raw.servings || 4))),
+      prepMinutes: Math.max(0, Math.min(240, Math.round(raw.prepMinutes ?? 10))),
+      cookMinutes: Math.max(0, Math.min(360, Math.round(raw.cookMinutes ?? 20))),
+      tags: (raw.tags ?? [])
+        .map((t) => t.replace(/^#/, "").trim().toLowerCase())
+        .filter(Boolean)
+        .slice(0, 5),
+      ingredients,
+      steps: (raw.steps ?? [])
+        .map((s) => s.replace(/^\d+[.)]\s*/, "").trim())
+        .filter(Boolean),
+    };
+  });
+
+  return { drafts, model: data.model || AI_VISION_MODEL };
+}

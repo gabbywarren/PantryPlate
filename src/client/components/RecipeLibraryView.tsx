@@ -22,6 +22,7 @@ interface Props {
   loading: boolean;
   onSelectRecipe: (id: string) => void;
   onOpenImport: (inboxItem?: InboxScreenshot) => void;
+  onOpenPantryChef: () => void;
   onDismissInbox: (id: string) => void;
   onSeedSamples: () => Promise<void>;
 }
@@ -39,6 +40,7 @@ export function RecipeLibraryView({
   loading,
   onSelectRecipe,
   onOpenImport,
+  onOpenPantryChef,
   onDismissInbox,
   onSeedSamples,
 }: Props) {
@@ -146,7 +148,15 @@ export function RecipeLibraryView({
           </select>
         </div>
 
-        <div className="flex gap-2 overflow-x-auto pb-0.5">
+        <div className="flex items-center gap-2 overflow-x-auto pb-0.5">
+          <button
+            type="button"
+            onClick={onOpenPantryChef}
+            className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-[#C85A32] px-3.5 py-1.5 text-xs font-bold text-white shadow-xs hover:bg-[#A84824]"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Cook From Pantry
+          </button>
           {[
             { id: "all", label: "All Recipes" },
             { id: "can_cook", label: "Ready to Cook" },

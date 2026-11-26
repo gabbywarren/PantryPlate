@@ -221,3 +221,22 @@ export interface PriceOverride {
   source: string;
   updatedAt: string;
 }
+
+export interface GeneratedRecipeIdea {
+  title: string;
+  description: string;
+  servings: number;
+  prepMinutes: number;
+  cookMinutes: number;
+  tags: string[];
+  ingredients: RecipeIngredient[];
+  steps: string[];
+  nutritionScore: number;
+  nutritionGrade: NutritionGrade;
+  nutritionBreakdown: NutritionBreakdown;
+  estimatedCostCents: number;
+  costPerServingCents: number;
+  pantrySummary: RecipePantrySummary;
+  usedPantryIngredients: string[];
+  missingIngredients: string[];
+}

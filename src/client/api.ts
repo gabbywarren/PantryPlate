@@ -1,6 +1,7 @@
 import type { ParsedRecipeDraft } from "../shared/recipeParser";
 import type {
   FoodProduct,
+  GeneratedRecipeIdea,
   InboxScreenshot,
   IngredientInput,
   PantryItem,
@@ -136,6 +137,20 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    generateFromPantry: (payload: {
+      mealType?: "any" | "breakfast" | "lunch" | "dinner" | "snack" | "dessert";
+      maxMinutes?: number;
+      strictMode?: boolean;
+      craving?: string;
+      priorityItemIds?: string[];
+    }) =>
+      request<{ ideas: GeneratedRecipeIdea[]; model: string; pantryCountUsed: number }>(
+        "/api/recipes/generate-from-pantry",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+        }
+      ),
     seedSamples: () =>
       request<{ seededRecipes: number; starterPantryAdded: boolean }>(
         "/api/recipes/seed-samples",

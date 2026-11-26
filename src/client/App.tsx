@@ -18,6 +18,7 @@ import type {
 } from "../shared/types";
 import { api } from "./api";
 import { ImportRecipeView } from "./components/ImportRecipeView";
+import { PantryChefModal } from "./components/PantryChefModal";
 import { PantryView } from "./components/PantryView";
 import { RecipeDetailView } from "./components/RecipeDetailView";
 import { RecipeLibraryView } from "./components/RecipeLibraryView";
@@ -36,6 +37,7 @@ export function App() {
   const [editingRecipe, setEditingRecipe] = useState<RecipeDetail | null>(null);
   const [activeInboxItem, setActiveInboxItem] = useState<InboxScreenshot | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPantryChef, setShowPantryChef] = useState(false);
 
   const [recipes, setRecipes] = useState<RecipeSummary[]>([]);
   const [pantryItems, setPantryItems] = useState<PantryItem[]>([]);
@@ -268,6 +270,7 @@ export function App() {
               setActiveInboxItem(inbox ?? null);
               setTab("import");
             }}
+            onOpenPantryChef={() => setShowPantryChef(true)}
             onDismissInbox={async (id) => {
               await api.inbox.delete(id);
               await refreshAll();
@@ -299,7 +302,12 @@ export function App() {
             }}
           />
         ) : tab === "pantry" ? (
-          <PantryView items={pantryItems} onRefresh={refreshAll} onToast={showToast} />
+          <PantryView
+            items={pantryItems}
+            onRefresh={refreshAll}
+            onToast={showToast}
+            onOpenPantryChef={() => setShowPantryChef(true)}
+          />
         ) : (
           <ShoppingListView
             items={shoppingItems}
@@ -355,6 +363,21 @@ export function App() {
           onClose={() => setShowSettings(false)}
           onDataChanged={refreshAll}
           onToast={showToast}
+        />
+      )}
+
+      {/* AI Cook From Pantry Modal */}
+      {showPantryChef && (
+        <PantryChefModal
+          pantryItems={pantryItems}
+          onClose={() => setShowPantryChef(false)}
+          onSavedRecipe={async (recipeId) => {
+            setShowPantryChef(false);
+            await refreshAll();
+            setSelectedRecipeId(recipeId);
+            setTab("library");
+            showToast("Saved Pantry Chef recipe to your library!");
+          }}
         />
       )}
 

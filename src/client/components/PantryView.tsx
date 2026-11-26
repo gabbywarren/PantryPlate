@@ -7,6 +7,7 @@ import {
   ScanBarcode,
   Search,
   Snowflake,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { formatCents } from "../../shared/costEstimator";
@@ -19,6 +20,7 @@ interface Props {
   items: PantryItem[];
   onRefresh: () => Promise<void>;
   onToast: (msg: string) => void;
+  onOpenPantryChef: () => void;
 }
 
 const LOCATION_META: { id: "all" | StorageLocation; label: string; icon: typeof Package }[] = [
@@ -29,7 +31,7 @@ const LOCATION_META: { id: "all" | StorageLocation; label: string; icon: typeof 
   { id: "spices", label: "Spices & Oils", icon: Flame },
 ];
 
-export function PantryView({ items, onRefresh, onToast }: Props) {
+export function PantryView({ items, onRefresh, onToast, onOpenPantryChef }: Props) {
   const [locationFilter, setLocationFilter] = useState<"all" | StorageLocation>("all");
   const [searchText, setSearchText] = useState("");
   const [showScanner, setShowScanner] = useState(false);
@@ -110,14 +112,24 @@ export function PantryView({ items, onRefresh, onToast }: Props) {
             Track what you have at home so recipe shopping lists skip what you already own.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowScanner(true)}
-          className="inline-flex items-center gap-2 rounded-2xl bg-[#C85A32] px-4 py-2.5 text-sm font-bold text-white shadow-sm hover:bg-[#A84824]"
-        >
-          <ScanBarcode className="h-4 w-4" />
-          Scan Barcode
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenPantryChef}
+            className="inline-flex items-center gap-1.5 rounded-2xl bg-[#1E1C19] px-3.5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-sm hover:bg-[#33302B]"
+          >
+            <Sparkles className="h-4 w-4 text-[#F2B880]" />
+            Create Recipes
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowScanner(true)}
+            className="inline-flex items-center gap-1.5 rounded-2xl bg-[#C85A32] px-3.5 py-2.5 text-xs sm:text-sm font-bold text-white shadow-sm hover:bg-[#A84824]"
+          >
+            <ScanBarcode className="h-4 w-4" />
+            Scan Barcode
+          </button>
+        </div>
       </div>
 
       {/* Quick Add Staple Bar */}
