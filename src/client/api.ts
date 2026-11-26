@@ -1,3 +1,4 @@
+import type { ParsedRecipeDraft } from "../shared/recipeParser";
 import type {
   FoodProduct,
   InboxScreenshot,
@@ -129,6 +130,12 @@ export const api = {
         body: form,
       });
     },
+    aiStatus: () => request<{ aiEnabled: boolean; model: string }>("/api/recipes/ai-status"),
+    extractAi: (payload: { imageKeys?: string[]; rawText?: string }) =>
+      request<{ draft: ParsedRecipeDraft; model: string }>("/api/recipes/extract-ai", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      }),
     seedSamples: () =>
       request<{ seededRecipes: number; starterPantryAdded: boolean }>(
         "/api/recipes/seed-samples",

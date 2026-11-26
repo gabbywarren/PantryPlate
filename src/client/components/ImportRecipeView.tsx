@@ -16,7 +16,11 @@ import {
 import { calculateRecipeCost, formatCents } from "../../shared/costEstimator";
 import { canonicalizeIngredientName, guessAisle } from "../../shared/foodDatabase";
 import { calculateRecipeNutrition } from "../../shared/nutritionScore";
-import { parseIngredientLine, parseRecipeText } from "../../shared/recipeParser";
+import {
+  parseIngredientLine,
+  parseRecipeText,
+  type ParsedRecipeDraft,
+} from "../../shared/recipeParser";
 import type {
   InboxScreenshot,
   IngredientInput,
@@ -54,6 +58,7 @@ export function ImportRecipeView({
   const [mode, setMode] = useState<"screenshot" | "paste" | "manual">(
     editingRecipe ? "manual" : "screenshot"
   );
+  const [aiStatus, setAiStatus] = useState<{ aiEnabled: boolean; model: string } | null>(null);
   const [rawPasteText, setRawPasteText] = useState("");
   const [screenshots, setScreenshots] = useState<UploadedScreenshot[]>(() =>
     editingRecipe
@@ -66,6 +71,8 @@ export function ImportRecipeView({
   );
   const [showRefImage, setShowRefImage] = useState(true);
   const [ocrProgress, setOcrProgress] = useState<{ pct: number; label: string } | null>(null);
+  const [extractionBadge, setExtractionBadge] = useState<string | null>(null);
+  const [parsingPaste, setParsingPaste] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
 
   // Structured recipe state
@@ -103,88 +110,155 @@ export function ImportRecipeView({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Auto-run OCR when arriving from an iPhone Shortcut Inbox screenshot
+  useEffect(() => {
+    void api.recipes
+      .aiStatus()
+      .then(setAiStatus)
+      .catch(() => setAiStatus({ aiEnabled: false, model: "local-ocr" }));
+  }, []);
+
+  function applyDraft(draft: ParsedRecipeDraft, replaceExisting = false) {
+    setTitle((prev) => (replaceExisting || !prev ? draft.title : prev));
+    if (draft.description) {
+      setDescription((prev) => (replaceExisting || !prev ? draft.description : prev));
+    }
+    if (draft.sourceHandle) {
+      setSourceHandle((prev) => (replaceExisting || !prev ? draft.sourceHandle : prev));
+    }
+    setServings(draft.servings);
+    setPrepMinutes(draft.prepMinutes);
+    setCookMinutes(draft.cookMinutes);
+    if (draft.tags.length > 0) {
+      setTagsText((prev) => (replaceExisting || !prev ? draft.tags.join(", ") : prev));
+    }
+    if (draft.ingredients.length > 0) {
+      setIngredients((prev) =>
+        replaceExisting || prev.length === 0 ? draft.ingredients : [...prev, ...draft.ingredients]
+      );
+    }
+    if (draft.steps.length > 0) {
+      setSteps((prev) =>
+        replaceExisting || prev.length === 0 ? draft.steps : [...prev, ...draft.steps]
+      );
+    }
+  }
+
+  // Auto-run GPT-6 Luna Vision (with local OCR fallback) when arriving from an iPhone Shortcut Inbox screenshot
   useEffect(() => {
     if (!inboxItem) return;
     let cancelled = false;
-    async function runInboxOcr() {
+    async function runInboxExtract() {
       if (!inboxItem) return;
       setMode("screenshot");
       setError(null);
-      setOcrProgress({ pct: 10, label: "Loading shared iPhone screenshot…" });
+      setOcrProgress({ pct: 20, label: "Analyzing shared iPhone screenshot with GPT-6 Luna…" });
+      setScreenshots([
+        { imageKey: inboxItem.imageKey, imageUrl: inboxItem.imageUrl, ocrText: "" },
+      ]);
+
       try {
-        const texts = await extractTextFromScreenshots([inboxItem.imageUrl], (pct, label) => {
-          if (!cancelled) setOcrProgress({ pct, label });
-        });
+        const res = await api.recipes.extractAi({ imageKeys: [inboxItem.imageKey] });
         if (cancelled) return;
-        const ocrText = texts[0] ?? "";
-        setScreenshots([
-          { imageKey: inboxItem.imageKey, imageUrl: inboxItem.imageUrl, ocrText },
-        ]);
-        applyParsedText(ocrText);
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "OCR failed on shared screenshot");
+        applyDraft(res.draft, true);
+        setExtractionBadge(`Extracted with ${res.model}`);
+      } catch {
+        if (cancelled) return;
+        setOcrProgress({ pct: 35, label: "Falling back to local on-device OCR…" });
+        try {
+          const texts = await extractTextFromScreenshots([inboxItem.imageUrl], (pct, label) => {
+            if (!cancelled) setOcrProgress({ pct, label });
+          });
+          if (cancelled) return;
+          const ocrText = texts[0] ?? "";
+          setScreenshots([
+            { imageKey: inboxItem.imageKey, imageUrl: inboxItem.imageUrl, ocrText },
+          ]);
+          applyDraft(parseRecipeText(ocrText), true);
+          setExtractionBadge("Extracted with local OCR");
+        } catch (err) {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : "Could not read shared screenshot");
+          }
         }
       } finally {
         if (!cancelled) setOcrProgress(null);
       }
     }
-    void runInboxOcr();
+    void runInboxExtract();
     return () => {
       cancelled = true;
     };
   }, [inboxItem?.id]);
 
-  function applyParsedText(text: string) {
-    if (!text.trim()) return;
-    const draft = parseRecipeText(text);
-    setTitle((prev) => prev || draft.title);
-    if (draft.description) setDescription((prev) => prev || draft.description);
-    if (draft.sourceHandle) setSourceHandle((prev) => prev || draft.sourceHandle);
-    setServings(draft.servings);
-    setPrepMinutes(draft.prepMinutes);
-    setCookMinutes(draft.cookMinutes);
-    if (draft.tags.length > 0) {
-      setTagsText((prev) => prev || draft.tags.join(", "));
-    }
-    if (draft.ingredients.length > 0) {
-      setIngredients((prev) => (prev.length > 0 ? [...prev, ...draft.ingredients] : draft.ingredients));
-    }
-    if (draft.steps.length > 0) {
-      setSteps((prev) => (prev.length > 0 ? [...prev, ...draft.steps] : draft.steps));
-    }
-  }
-
   async function handleScreenshotsSelected(files: FileList | null) {
     if (!files || files.length === 0) return;
     setError(null);
+    setExtractionBadge(null);
     const fileArr = Array.from(files).slice(0, 6);
-    setOcrProgress({ pct: 5, label: `Uploading ${fileArr.length} screenshot(s)…` });
+    setOcrProgress({ pct: 18, label: `Uploading ${fileArr.length} screenshot(s)…` });
 
     try {
-      // Upload to R2 & run local client-side OCR in parallel
-      const [uploaded, ocrTexts] = await Promise.all([
-        Promise.all(fileArr.map((f) => api.recipes.uploadImage(f, "screenshot"))),
-        extractTextFromScreenshots(fileArr, (pct, label) => {
-          setOcrProgress({ pct, label });
-        }),
-      ]);
+      // 1. Compress & upload screenshots to Cloudflare D1
+      const uploaded = await Promise.all(
+        fileArr.map((f) => api.recipes.uploadImage(f, "screenshot"))
+      );
 
-      const newItems: UploadedScreenshot[] = uploaded.map((u, idx) => ({
+      const newItems: UploadedScreenshot[] = uploaded.map((u) => ({
         imageKey: u.imageKey,
         imageUrl: u.imageUrl,
-        ocrText: ocrTexts[idx] ?? "",
+        ocrText: "",
       }));
+      const allScreenshots = [...screenshots, ...newItems];
+      setScreenshots(allScreenshots);
 
-      setScreenshots((prev) => [...prev, ...newItems]);
-      const combinedText = ocrTexts.filter(Boolean).join("\n\n");
-      setRawPasteText((prev) => (prev ? `${prev}\n\n${combinedText}` : combinedText));
-      applyParsedText(combinedText);
+      // 2. Try GPT-6 Luna Vision across all uploaded screenshots together
+      setOcrProgress({
+        pct: 55,
+        label: `Reading ${allScreenshots.length} screenshot(s) with GPT-6 Luna Vision…`,
+      });
+      try {
+        const aiRes = await api.recipes.extractAi({
+          imageKeys: allScreenshots.map((s) => s.imageKey),
+        });
+        setOcrProgress({ pct: 100, label: "Recipe extracted!" });
+        applyDraft(aiRes.draft, true);
+        setExtractionBadge(`Extracted with ${aiRes.model}`);
+      } catch {
+        // 3. Automatic seamless fallback to local client-side OCR
+        setOcrProgress({ pct: 30, label: "Using local on-device OCR fallback…" });
+        const ocrTexts = await extractTextFromScreenshots(fileArr, (pct, label) => {
+          setOcrProgress({ pct, label });
+        });
+        const combinedText = ocrTexts.filter(Boolean).join("\n\n");
+        setRawPasteText((prev) => (prev ? `${prev}\n\n${combinedText}` : combinedText));
+        applyDraft(parseRecipeText(combinedText), false);
+        setExtractionBadge("Extracted with local OCR");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to process screenshots");
     } finally {
       setOcrProgress(null);
+    }
+  }
+
+  async function handleParsePastedText() {
+    if (!rawPasteText.trim()) return;
+    setError(null);
+    setParsingPaste(true);
+    try {
+      if (aiStatus?.aiEnabled) {
+        const aiRes = await api.recipes.extractAi({ rawText: rawPasteText });
+        applyDraft(aiRes.draft, true);
+        setExtractionBadge(`Cleaned with ${aiRes.model}`);
+      } else {
+        applyDraft(parseRecipeText(rawPasteText), true);
+        setExtractionBadge("Parsed locally");
+      }
+    } catch {
+      applyDraft(parseRecipeText(rawPasteText), true);
+      setExtractionBadge("Parsed locally");
+    } finally {
+      setParsingPaste(false);
     }
   }
 
@@ -261,13 +335,23 @@ export function ImportRecipeView({
 
   return (
     <form onSubmit={handleSave} className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-2">
         <div>
-          <h2 className="font-editorial text-2xl font-bold text-[#1E1C19]">
-            {editingRecipe ? "Edit Recipe" : "Import Recipe"}
-          </h2>
-          <p className="text-xs text-[#635D54]">
-            Extract from Instagram/web screenshots locally (no API key needed) or paste text.
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="font-editorial text-2xl font-bold text-[#1E1C19]">
+              {editingRecipe ? "Edit Recipe" : "Import Recipe"}
+            </h2>
+            {aiStatus?.aiEnabled && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200 px-2.5 py-0.5 text-[11px] font-bold text-emerald-800">
+                <Sparkles className="h-3 w-3 text-emerald-600" />
+                GPT-6 Luna Vision
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-[#635D54] mt-0.5">
+            {aiStatus?.aiEnabled
+              ? "Upload Instagram or web recipe screenshots — GPT-6 Luna turns them into clean, legible recipe cards automatically."
+              : "Extract from Instagram/web screenshots locally or paste recipe text."}
           </p>
         </div>
         {onCancel && (
@@ -306,7 +390,7 @@ export function ImportRecipeView({
         </div>
       )}
 
-      {/* SCREENSHOT OCR UPLOAD ZONE */}
+      {/* SCREENSHOT VISION / OCR UPLOAD ZONE */}
       {mode === "screenshot" && (
         <div className="rounded-3xl bg-white border border-[#EAE3D9] p-5 space-y-4">
           <label className="flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-[#D8CFC2] bg-[#FAF8F4] p-6 text-center cursor-pointer hover:border-[#C85A32] transition">
@@ -318,8 +402,10 @@ export function ImportRecipeView({
                 Tap to select Instagram or recipe screenshot(s)
               </p>
               <p className="text-xs text-[#635D54]">
-                Select multiple slides at once (e.g. ingredients + instructions). Local OCR runs
-                right on your device.
+                Select 1 or multiple slides at once (e.g. photo + ingredients + steps).{" "}
+                {aiStatus?.aiEnabled
+                  ? "Parsed cleanly with GPT-6 Luna Vision."
+                  : "Local OCR runs on your device."}
               </p>
             </div>
             <input
@@ -348,6 +434,13 @@ export function ImportRecipeView({
               </div>
             </div>
           )}
+
+          {extractionBadge && !ocrProgress && (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-semibold text-emerald-800">
+              <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+              {extractionBadge} — review below and tap Save to Library
+            </div>
+          )}
         </div>
       )}
 
@@ -366,16 +459,20 @@ export function ImportRecipeView({
           />
           <button
             type="button"
-            onClick={() => {
-              setTitle("");
-              setIngredients([]);
-              setSteps([]);
-              applyParsedText(rawPasteText);
-            }}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1E1C19] px-4 py-2 text-xs font-bold text-white hover:bg-[#33302B]"
+            disabled={parsingPaste || !rawPasteText.trim()}
+            onClick={() => void handleParsePastedText()}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#1E1C19] px-4 py-2 text-xs font-bold text-white hover:bg-[#33302B] disabled:opacity-50"
           >
-            <Sparkles className="h-3.5 w-3.5 text-[#F2B880]" />
-            Parse Into Clean Recipe Card
+            {parsingPaste ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin text-[#F2B880]" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 text-[#F2B880]" />
+            )}
+            {parsingPaste
+              ? "Parsing with GPT-6 Luna…"
+              : aiStatus?.aiEnabled
+                ? "Parse with GPT-6 Luna"
+                : "Parse Into Clean Recipe Card"}
           </button>
         </div>
       )}

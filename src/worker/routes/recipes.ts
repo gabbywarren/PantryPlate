@@ -25,6 +25,7 @@ import {
   type RecipeRow,
 } from "../lib/dbHelpers";
 import { deleteImagesFromDb, saveImageToDb } from "../lib/imageStore";
+import { AI_VISION_MODEL, extractRecipeWithLuna } from "../lib/aiExtract";
 
 const ingredientSchema = z.object({
   rawText: z.string().optional().default(""),
@@ -59,6 +60,83 @@ const recipeUpsertSchema = z.object({
 });
 
 export const recipesRoutes = new Hono<{ Bindings: WorkerBindings }>();
+
+// Check if GPT-6 Luna AI Vision is enabled
+recipesRoutes.get("/ai-status", (c) => {
+  return c.json({
+    aiEnabled: Boolean(c.env.OPENAI_API_KEY),
+    model: AI_VISION_MODEL,
+  });
+});
+
+const extractAiSchema = z.object({
+  imageKeys: z.array(z.string().min(1)).max(6).optional().default([]),
+  rawText: z.string().max(15000).optional().default(""),
+});
+
+// Extract structured recipe directly from uploaded screenshots &/or pasted caption via GPT-6 Luna Vision
+recipesRoutes.post("/extract-ai", async (c) => {
+  const apiKey = c.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    return c.json(
+      { error: "OpenAI API key not configured", fallbackToLocalOcr: true },
+      503
+    );
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = extractAiSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Invalid extraction payload" }, 400);
+  }
+
+  const { imageKeys, rawText } = parsed.data;
+  if (imageKeys.length === 0 && !rawText.trim()) {
+    return c.json({ error: "Provide at least one screenshot or recipe text" }, 400);
+  }
+
+  const images: { contentType: string; dataBase64: string }[] = [];
+  for (const key of imageKeys) {
+    const row = await c.env.DB.prepare(
+      "SELECT content_type, data_base64 FROM stored_images WHERE key = ?"
+    )
+      .bind(key)
+      .first<{ content_type: string; data_base64: string }>();
+    if (row) {
+      images.push({
+        contentType: row.content_type || "image/jpeg",
+        dataBase64: row.data_base64,
+      });
+    }
+  }
+
+  if (imageKeys.length > 0 && images.length === 0 && !rawText.trim()) {
+    return c.json({ error: "Uploaded screenshot(s) could not be found" }, 404);
+  }
+
+  try {
+    const result = await extractRecipeWithLuna({
+      apiKey,
+      images,
+      rawText,
+    });
+    return c.json(result);
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        message: "extract_ai_failed",
+        error: err instanceof Error ? err.message : String(err),
+      })
+    );
+    return c.json(
+      {
+        error: err instanceof Error ? err.message : "AI extraction failed",
+        fallbackToLocalOcr: true,
+      },
+      502
+    );
+  }
+});
 
 // Upload compressed screenshot or cover photo to D1 stored_images
 recipesRoutes.post("/upload-image", async (c) => {

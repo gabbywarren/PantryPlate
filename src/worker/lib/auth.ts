@@ -1,5 +1,6 @@
 export type WorkerBindings = Env & {
   APP_PIN?: string;
+  OPENAI_API_KEY?: string;
 };
 
 const COOKIE_NAME = "pantryplate_session";
