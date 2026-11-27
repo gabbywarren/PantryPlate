@@ -5,7 +5,9 @@ import {
   ChevronUp,
   ClipboardPaste,
   FileText,
+  Globe,
   Image as ImageIcon,
+  Link2,
   Loader2,
   Plus,
   Save,
@@ -55,10 +57,12 @@ export function ImportRecipeView({
   onSaved,
   onCancel,
 }: Props) {
-  const [mode, setMode] = useState<"screenshot" | "paste" | "manual">(
+  const [mode, setMode] = useState<"screenshot" | "link" | "paste" | "manual">(
     editingRecipe ? "manual" : "screenshot"
   );
   const [aiStatus, setAiStatus] = useState<{ aiEnabled: boolean; model: string } | null>(null);
+  const [linkInput, setLinkInput] = useState("");
+  const [importingUrl, setImportingUrl] = useState<"review" | "save" | null>(null);
   const [rawPasteText, setRawPasteText] = useState("");
   const [screenshots, setScreenshots] = useState<UploadedScreenshot[]>(() =>
     editingRecipe
@@ -241,6 +245,60 @@ export function ImportRecipeView({
     }
   }
 
+  async function handleImportUrl(autoSave: boolean) {
+    if (!linkInput.trim()) return;
+    setError(null);
+    setExtractionBadge(null);
+    setImportingUrl(autoSave ? "save" : "review");
+    try {
+      const res = await api.recipes.importUrl(linkInput.trim());
+      if (autoSave) {
+        const cleanIngredients = res.draft.ingredients
+          .filter((i) => i.name.trim().length > 0)
+          .map((i) => ({
+            ...i,
+            canonicalName: canonicalizeIngredientName(i.name),
+            aisle: i.aisle || guessAisle(i.name),
+          }));
+
+        const saved = await api.recipes.create({
+          title: res.draft.title,
+          description: res.draft.description,
+          sourceUrl: res.sourceUrl,
+          sourceHandle: res.draft.sourceHandle,
+          servings: res.draft.servings,
+          prepMinutes: res.draft.prepMinutes,
+          cookMinutes: res.draft.cookMinutes,
+          coverImageKey: res.coverImageKey,
+          tags: res.draft.tags,
+          ingredients: cleanIngredients,
+          steps: res.draft.steps,
+          screenshots: [],
+        });
+        onSaved(saved.id);
+        return;
+      }
+
+      applyDraft(res.draft, true);
+      setSourceUrl(res.sourceUrl);
+      if (res.coverImageKey && res.coverImageUrl) {
+        setCoverImageKey(res.coverImageKey);
+        setCoverPreviewUrl(res.coverImageUrl);
+      }
+      setExtractionBadge(
+        res.method === "json-ld"
+          ? "Imported directly from recipe page"
+          : res.method === "gpt-6-luna"
+            ? "Extracted from webpage with GPT-6 Luna"
+            : "Parsed from webpage"
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not import recipe from that link");
+    } finally {
+      setImportingUrl(null);
+    }
+  }
+
   async function handleParsePastedText() {
     if (!rawPasteText.trim()) return;
     setError(null);
@@ -367,17 +425,18 @@ export function ImportRecipeView({
 
       {/* Mode Switcher */}
       {!editingRecipe && (
-        <div className="grid grid-cols-3 rounded-2xl bg-[#EFEAE2] p-1">
+        <div className="grid grid-cols-4 rounded-2xl bg-[#EFEAE2] p-1 gap-0.5">
           {[
-            { id: "screenshot", label: "Screenshots", icon: Camera },
-            { id: "paste", label: "Paste Text", icon: ClipboardPaste },
+            { id: "screenshot", label: "Photo", icon: Camera },
+            { id: "link", label: "Link", icon: Link2 },
+            { id: "paste", label: "Paste", icon: ClipboardPaste },
             { id: "manual", label: "Manual", icon: FileText },
           ].map((m) => (
             <button
               key={m.id}
               type="button"
               onClick={() => setMode(m.id as typeof mode)}
-              className={`inline-flex items-center justify-center gap-1.5 rounded-xl py-2.5 text-xs font-bold transition ${
+              className={`inline-flex items-center justify-center gap-1 rounded-xl py-2.5 text-xs font-bold transition ${
                 mode === m.id
                   ? "bg-white text-[#1E1C19] shadow-xs"
                   : "text-[#635D54] hover:text-[#1E1C19]"
@@ -387,6 +446,73 @@ export function ImportRecipeView({
               {m.label}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* WEBSITE LINK IMPORT MODE */}
+      {mode === "link" && (
+        <div className="rounded-3xl bg-white border border-[#EAE3D9] p-5 space-y-3.5">
+          <div className="flex items-center gap-2">
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#FFF2E8] text-[#C85A32]">
+              <Globe className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-[#1E1C19]">Paste a Recipe Website Link</h3>
+              <p className="text-xs text-[#635D54]">
+                Skips the blog story &amp; ads — grabs the dish photo, ingredients, and clean steps.
+              </p>
+            </div>
+          </div>
+
+          <input
+            type="url"
+            value={linkInput}
+            onChange={(e) => setLinkInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && linkInput.trim()) {
+                e.preventDefault();
+                void handleImportUrl(false);
+              }
+            }}
+            placeholder="https://www.loveandlemons.com/..."
+            className="w-full rounded-2xl border border-[#DDD5C9] bg-[#FAF8F4] px-3.5 py-3 text-sm focus:border-[#C85A32] focus:outline-none"
+          />
+
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={importingUrl !== null || !linkInput.trim()}
+              onClick={() => void handleImportUrl(true)}
+              className="flex-1 min-w-[150px] inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#C85A32] px-4 py-2.5 text-xs font-bold text-white shadow-xs hover:bg-[#A84824] disabled:opacity-50"
+            >
+              {importingUrl === "save" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Sparkles className="h-3.5 w-3.5" />
+              )}
+              {importingUrl === "save" ? "Importing & Saving…" : "Import & Save Now"}
+            </button>
+            <button
+              type="button"
+              disabled={importingUrl !== null || !linkInput.trim()}
+              onClick={() => void handleImportUrl(false)}
+              className="flex-1 min-w-[140px] inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#1E1C19] px-4 py-2.5 text-xs font-bold text-white hover:bg-[#33302B] disabled:opacity-50"
+            >
+              {importingUrl === "review" ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Link2 className="h-3.5 w-3.5" />
+              )}
+              {importingUrl === "review" ? "Fetching Recipe…" : "Import & Review"}
+            </button>
+          </div>
+
+          {extractionBadge && importingUrl === null && (
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 border border-emerald-200 px-3 py-1 text-xs font-semibold text-emerald-800">
+              <Sparkles className="h-3.5 w-3.5 text-emerald-600" />
+              {extractionBadge} — review below and tap Save to Library
+            </div>
+          )}
         </div>
       )}
 
@@ -616,7 +742,7 @@ export function ImportRecipeView({
           <div className="grid sm:grid-cols-2 gap-2.5">
             <div>
               <label className="block text-xs font-semibold text-[#524C44] mb-1">
-                Creator / Source (@handle)
+                Creator / Source (@handle or Site)
               </label>
               <input
                 type="text"
@@ -628,16 +754,29 @@ export function ImportRecipeView({
             </div>
             <div>
               <label className="block text-xs font-semibold text-[#524C44] mb-1">
-                Tags (comma separated)
+                Source Link (optional)
               </label>
               <input
-                type="text"
-                value={tagsText}
-                onChange={(e) => setTagsText(e.target.value)}
-                placeholder="weeknight, high-protein, pasta"
+                type="url"
+                value={sourceUrl}
+                onChange={(e) => setSourceUrl(e.target.value)}
+                placeholder="https://…"
                 className="w-full rounded-xl border border-[#DDD5C9] bg-[#FAF8F4] px-3 py-2 text-sm"
               />
             </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-[#524C44] mb-1">
+              Tags (comma separated)
+            </label>
+            <input
+              type="text"
+              value={tagsText}
+              onChange={(e) => setTagsText(e.target.value)}
+              placeholder="weeknight, high-protein, pasta"
+              className="w-full rounded-xl border border-[#DDD5C9] bg-[#FAF8F4] px-3 py-2 text-sm"
+            />
           </div>
 
           {/* Optional Dish Cover Photo */}

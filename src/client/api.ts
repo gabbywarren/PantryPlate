@@ -137,6 +137,17 @@ export const api = {
         method: "POST",
         body: JSON.stringify(payload),
       }),
+    importUrl: (url: string) =>
+      request<{
+        draft: ParsedRecipeDraft;
+        sourceUrl: string;
+        coverImageKey: string | null;
+        coverImageUrl: string | null;
+        method: "json-ld" | "gpt-6-luna" | "local-parser";
+      }>("/api/recipes/import-url", {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      }),
     generateFromPantry: (payload: {
       mealType?: "any" | "breakfast" | "lunch" | "dinner" | "snack" | "dessert";
       maxMinutes?: number;

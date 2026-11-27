@@ -30,6 +30,14 @@ import {
   extractRecipeWithLuna,
   generateRecipesFromPantryWithLuna,
 } from "../lib/aiExtract";
+import {
+  extractMetaImageFromHtml,
+  extractRecipeFromHtmlJsonLd,
+  fetchCoverImageBytes,
+  fetchRecipeWebpage,
+  htmlToReadableText,
+} from "../lib/urlImport";
+import { parseRecipeText } from "../../shared/recipeParser";
 import type { GeneratedRecipeIdea, RecipeIngredient } from "../../shared/types";
 
 const ingredientSchema = z.object({
@@ -141,6 +149,110 @@ recipesRoutes.post("/extract-ai", async (c) => {
       502
     );
   }
+});
+
+const importUrlSchema = z.object({
+  url: z.string().min(4).max(1500),
+});
+
+// Import a recipe directly from any website link (Schema.org JSON-LD first, GPT-6 Luna fallback)
+recipesRoutes.post("/import-url", async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const parsed = importUrlSchema.safeParse(body);
+  if (!parsed.success) {
+    return c.json({ error: "Please provide a valid recipe website URL" }, 400);
+  }
+
+  let html: string;
+  let finalUrl: string;
+  try {
+    const fetched = await fetchRecipeWebpage(parsed.data.url);
+    html = fetched.html;
+    finalUrl = fetched.finalUrl;
+  } catch (err) {
+    return c.json(
+      { error: err instanceof Error ? err.message : "Could not load that webpage" },
+      422
+    );
+  }
+
+  // Stage 1: Instant Schema.org JSON-LD Recipe extraction
+  const jsonLd = extractRecipeFromHtmlJsonLd(html, finalUrl);
+  let draft = jsonLd?.draft ?? null;
+  let coverSourceUrl = jsonLd?.imageUrl ?? extractMetaImageFromHtml(html, finalUrl);
+  let method: "json-ld" | "gpt-6-luna" | "local-parser" = "json-ld";
+
+  // Stage 2: If JSON-LD is missing or lacks ingredients/steps, use GPT-6 Luna on cleaned page text
+  if (!draft || (draft.ingredients.length === 0 && draft.steps.length === 0)) {
+    const readableText = htmlToReadableText(html);
+    if (!readableText.trim()) {
+      return c.json(
+        { error: "That site appears to block automated reading or requires login. Try taking a screenshot instead!" },
+        422
+      );
+    }
+
+    if (c.env.OPENAI_API_KEY) {
+      try {
+        const aiRes = await extractRecipeWithLuna({
+          apiKey: c.env.OPENAI_API_KEY,
+          images: [],
+          rawText: `Source URL: ${finalUrl}\n\n${readableText}`,
+        });
+        draft = aiRes.draft;
+        method = "gpt-6-luna";
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            message: "url_import_luna_fallback_failed",
+            url: finalUrl,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        );
+      }
+    }
+
+    if (!draft) {
+      draft = parseRecipeText(readableText);
+      method = "local-parser";
+    }
+  }
+
+  if (draft.ingredients.length === 0 && draft.steps.length === 0) {
+    return c.json(
+      {
+        error:
+          "No recipe was detected on that page (it may be behind a paywall or login). Try taking a screenshot or copying the text instead!",
+      },
+      422
+    );
+  }
+
+  // Optionally cache the recipe's dish cover photo into D1 stored_images
+  let coverImageKey: string | null = null;
+  let coverImageUrl: string | null = null;
+  if (coverSourceUrl) {
+    const img = await fetchCoverImageBytes(coverSourceUrl);
+    if (img) {
+      const ext = img.contentType.split("/")[1]?.replace(/[^a-z0-9]/gi, "") || "jpg";
+      const key = `covers/${crypto.randomUUID()}.${ext}`;
+      try {
+        await saveImageToDb(c.env.DB, key, img.buffer, img.contentType);
+        coverImageKey = key;
+        coverImageUrl = imageUrlFromKey(key);
+      } catch {
+        // Non-fatal if cover image is too large
+      }
+    }
+  }
+
+  return c.json({
+    draft,
+    sourceUrl: finalUrl,
+    coverImageKey,
+    coverImageUrl,
+    method,
+  });
 });
 
 const generatePantrySchema = z.object({

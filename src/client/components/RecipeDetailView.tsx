@@ -7,6 +7,7 @@ import {
   Clock,
   DollarSign,
   Edit3,
+  ExternalLink,
   Image as ImageIcon,
   ListChecks,
   ShoppingCart,
@@ -215,6 +216,16 @@ export function RecipeDetailView({
                 <span className="rounded-full bg-[#F3EFE8] px-2.5 py-0.5 text-xs font-medium text-[#635D54]">
                   {recipe.sourceHandle}
                 </span>
+              )}
+              {recipe.sourceUrl && (
+                <a
+                  href={recipe.sourceUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-full bg-[#FAF2EA] border border-[#F0D3BC] px-2.5 py-0.5 text-xs font-semibold text-[#9C401D] hover:bg-[#F7E5D4]"
+                >
+                  Original Recipe <ExternalLink className="h-3 w-3" />
+                </a>
               )}
               {recipe.tags.map((tag) => (
                 <span
