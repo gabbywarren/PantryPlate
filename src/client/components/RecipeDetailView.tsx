@@ -17,6 +17,10 @@ import {
   X,
 } from "lucide-react";
 import { formatCents } from "../../shared/costEstimator";
+import {
+  formatIngredientMeasurement,
+  matchIngredientsForStep,
+} from "../../shared/stepIngredients";
 import type { RecipeDetail } from "../../shared/types";
 import { formatQuantity } from "../../shared/unitConverter";
 import { api } from "../api";
@@ -559,6 +563,7 @@ export function RecipeDetailView({
           ) : (
             recipe.steps.map((step) => {
               const done = completedSteps.has(step.id);
+              const stepIngs = matchIngredientsForStep(step.instruction, recipe.ingredients);
               return (
                 <button
                   key={step.id}
@@ -584,13 +589,31 @@ export function RecipeDetailView({
                   >
                     {done ? <Check className="h-4 w-4 stroke-[3]" /> : step.stepNumber}
                   </span>
-                  <p
-                    className={`text-base leading-relaxed ${
-                      done ? "line-through text-[#8C8378]" : "text-[#1E1C19]"
-                    }`}
-                  >
-                    {step.instruction}
-                  </p>
+                  <div className="flex-1 space-y-2.5">
+                    <p
+                      className={`text-base leading-relaxed ${
+                        done ? "line-through text-[#8C8378]" : "text-[#1E1C19]"
+                      }`}
+                    >
+                      {step.instruction}
+                    </p>
+                    {stepIngs.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {stepIngs.map((ing) => (
+                          <span
+                            key={ing.id}
+                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold border ${
+                              done
+                                ? "bg-[#EFEAE2] text-[#8C8378] border-[#E2DCD2]"
+                                : "bg-[#FFF6EE] text-[#9C401D] border-[#F2D9C2]"
+                            }`}
+                          >
+                            {formatIngredientMeasurement(ing, scale)}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </button>
               );
             })

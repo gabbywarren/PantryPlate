@@ -68,7 +68,7 @@ Rules:
   - unit: standard short culinary unit ("cup", "tbsp", "tsp", "oz", "lb", "g", "ml", "clove", "can", "bunch", "slice", "each", or "" when quantity is null).
   - name: clean ingredient name WITHOUT quantity, unit, or prep instructions (e.g. "baby spinach", "boneless chicken breast", "extra virgin olive oil").
   - notes: prep details or package size (e.g. "finely diced", "15 oz, drained", "optional", or "").
-- Rewrite cooking instructions into clear, legible, step-by-step directions (one logical action per step, no leading step numbers like "1."). Stay faithful to the source recipe without inventing extra ingredients.`;
+- Rewrite cooking instructions into clear, legible, step-by-step directions (one logical action per step, no leading step numbers like "1."), weaving the exact ingredient measurements into each step (e.g. "Sauté 3 cloves minced garlic in 2 tbsp olive oil") so the cook doesn't have to flip back to the ingredient list. Stay faithful to the source recipe without inventing extra ingredients.`;
 
 interface AiExtractedRaw {
   title: string;
@@ -289,7 +289,7 @@ Rules:
 - Match ingredient names closely to the canonical names listed so pantry matching works accurately.
 - Keep total time (prepMinutes + cookMinutes) at or under ${params.maxMinutes} minutes.
 - Provide clean structured ingredients (quantity as decimal number or null, standard short unit like cup/tbsp/tsp/oz/lb/clove/can/each, clean ingredient name without prep words, concise notes).
-- Write clear, easy-to-follow numbered cooking steps (without leading "1." prefixes).`;
+- Write clear, easy-to-follow numbered cooking steps (without leading "1." prefixes), including the exact ingredient measurements right inside each step (e.g. "Toss 1 lb chicken with 1 tbsp olive oil and 1 tsp paprika") so the cook can follow along without flipping back.`;
 
   const userLines = [
     `Available Pantry & Fridge Inventory:\n${params.pantryLines.map((l) => `- ${l}`).join("\n")}`,
